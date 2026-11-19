@@ -1,0 +1,67 @@
+name: Crea APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepara icone e componente Excel
+        run: |
+          pip install --quiet pillow
+          python3 tools/make_icons.py
+          npm install --no-save --no-package-lock xlsx@0.18.5
+          cp node_modules/xlsx/dist/xlsx.mini.min.js app/src/main/assets/www/
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Chiave di firma (creata solo la prima volta)
+        run: |
+          if [ ! -f app/affitti.keystore ]; then
+            keytool -genkeypair -keystore app/affitti.keystore -storepass affitti123 -keypass affitti123 \
+              -alias affitti -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=I miei Affitti, C=IT"
+            git config user.name "github-actions[bot]"
+            git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+            git add -f app/affitti.keystore
+            git commit -m "Aggiunge la chiave di firma dell'APK"
+            git push
+          fi
+
+      - name: Compila l'APK
+        run: gradle assembleRelease --no-daemon --stacktrace
+
+      - name: Rinomina il file
+        run: cp app/build/outputs/apk/release/app-release.apk "IMieiAffitti-1.0.${{ github.run_number }}.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: IMieiAffitti-apk
+          path: IMieiAffitti-*.apk
+
+      - name: Pubblica nella pagina Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: I miei Affitti 1.0.${{ github.run_number }}
+          body: |
+            Scarica il file **.apk** qui sotto dal telefono e aprilo per installarlo o aggiornarlo.
+            I dati già inseriti restano sul telefono anche dopo l'aggiornamento.
+          files: IMieiAffitti-*.apk
+          make_latest: true
