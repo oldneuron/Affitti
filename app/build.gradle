@@ -1,0 +1,56 @@
+plugins {
+    id 'com.android.application'
+}
+
+// Il numero di versione cresce a ogni compilazione su GitHub,
+// così il telefono installa l'aggiornamento sopra la versione precedente.
+def buildNumber = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInteger()
+
+android {
+    namespace 'it.oldneuron.affitti'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'it.oldneuron.affitti'
+        minSdk 24
+        targetSdk 34
+        versionCode buildNumber
+        versionName "1.0." + buildNumber
+    }
+
+    signingConfigs {
+        affitti {
+            // Chiave fissa: serve perché gli aggiornamenti si installino senza
+            // dover disinstallare l'app (e perdere i dati).
+            storeFile file('affitti.keystore')
+            storePassword 'affitti123'
+            keyAlias 'affitti'
+            keyPassword 'affitti123'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.affitti
+        }
+        debug {
+            signingConfig signingConfigs.affitti
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    lint {
+        checkReleaseBuilds false
+        abortOnError false
+    }
+}
+
+dependencies {
+    implementation 'androidx.webkit:webkit:1.11.0'
+    implementation 'androidx.core:core:1.13.1'
+}
