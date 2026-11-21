@@ -515,11 +515,19 @@ function allReceipts() {
   return out.sort((a, b) => ((b.x.date || "") + b.x.rn).localeCompare((a.x.date || "") + a.x.rn));
 }
 let recShown = 20;
+const UPDATE_URL = "https://github.com/oldneuron/Affitti/releases/latest/download/IMieiAffitti-ultima.apk";
+const RELEASES_URL = "https://github.com/oldneuron/Affitti/releases";
+const appVersion = () => { try { return AB && AB.getVersion ? AB.getVersion() : ""; } catch (e) { return ""; } };
 function renderExport() {
   const nPay = state.props.reduce((s, p) => s + Object.values(p.payments).reduce((a, l) => a + l.length, 0), 0);
   const canShare = !!(navigator.canShare || AB);
   const recs = allReceipts();
   $("#main").innerHTML = `
+  ${AB ? `<div class="card"><h3>Aggiornamenti</h3>
+    <div class="cs">Versione installata: <b>${esc(appVersion() || "?")}</b>. Il pulsante scarica sempre l'ultima versione disponibile: al termine apri il file scaricato e installalo sopra quella attuale. I dati restano.</div>
+    <a class="btn" style="text-decoration:none" href="${UPDATE_URL}">⬇️ Scarica l'ultima versione</a>
+    <div class="gap"></div><a class="btn sec" style="text-decoration:none" href="${RELEASES_URL}">Vedi l'elenco delle versioni</a>
+  </div>` : ""}
   <div class="card"><h3>Ricevute</h3>
     <div class="cs">Ogni pagamento ha la sua ricevuta in PDF, sempre disponibile qui. Tocca una ricevuta per inviarla o salvarla.</div>
     ${AB ? `<label class="sw"><input type="checkbox" id="autoR"${state.settings.autoReceipt ? " checked" : ""}><span>Salva automaticamente ogni nuova ricevuta in <b>Download › Ricevute affitti</b></span></label>` : ""}

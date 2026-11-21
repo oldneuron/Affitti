@@ -163,6 +163,16 @@ public class MainActivity extends Activity {
             }
         }
 
+        /** Versione dell'app installata (es. "1.0.6"). */
+        @JavascriptInterface
+        public String getVersion() {
+            try {
+                return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+            } catch (Exception e) {
+                return "";
+            }
+        }
+
         /** Salva in Download/<sottocartella> (Android 10 e successivi). */
         @JavascriptInterface
         public String saveFileIn(String name, String mime, String base64, String subdir) {
