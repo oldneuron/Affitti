@@ -6,7 +6,8 @@ const LS_OLD = "box-pagamenti-v1";
 const MESI = ["gennaio","febbraio","marzo","aprile","maggio","giugno","luglio","agosto","settembre","ottobre","novembre","dicembre"];
 const MESI3 = ["gen","feb","mar","apr","mag","giu","lug","ago","set","ott","nov","dic"];
 const TIPI = ["Box / garage","Posto auto","Appartamento","Stanza","Negozio","Ufficio","Magazzino","Terreno","Casa vacanze","Altro"];
-const METODI = ["Contanti","Bonifico","Satispay / PayPal","Assegno","Altro"];
+const METODI = ["Contanti","Bonifico","Ricarica carta","Altro"];
+const METODI_RAPIDI = [["Contanti","💶"],["Bonifico","🏦"],["Ricarica carta","💳"]];
 const eur = new Intl.NumberFormat("it-IT", { style: "currency", currency: "EUR" });
 const eur0 = new Intl.NumberFormat("it-IT", { style: "currency", currency: "EUR", maximumFractionDigits: 0 });
 const $ = s => document.querySelector(s);
@@ -57,7 +58,20 @@ function fix() {
     p.type = p.type || "Altro";
   });
   if (!state.props.find(p => p.id === state.current)) state.current = state.props[0] ? state.props[0].id : null;
+  state.settings = Object.assign({ autoReceipt: true }, state.settings || {});
+  // numera le ricevute dei pagamenti che non hanno ancora un numero (in ordine di data)
+  state.rseq = state.rseq || {};
+  const missing = [];
+  state.props.forEach(p => Object.keys(p.payments).forEach(ym => p.payments[ym].forEach(x => { if (!x.rn) missing.push(x); })));
+  missing.sort((a, b) => (a.date || "") < (b.date || "") ? -1 : 1).forEach(assignReceipt);
+  if (missing.length) persist();
 }
+function assignReceipt(x) {
+  const y = (x.date || today()).slice(0, 4);
+  state.rseq[y] = (state.rseq[y] || 0) + 1;
+  x.rn = y + "/" + String(state.rseq[y]).padStart(3, "0");
+}
+const tenantName = p => (p.tenant || "").trim() || "Conduttore";
 const cur = () => state.props.find(p => p.id === state.current);
 function dueOf(p, ym) {
   if (!inContract(p, ym)) return 0;
@@ -322,12 +336,12 @@ function buildWorkbook() {
   const fin = (ws, cols, nRows, lastCol) => { ws["!cols"] = cols.map(w => ({ wch: w })); ws["!autofilter"] = { ref: `A1:${lastCol}${nRows + 1}` }; };
 
   // 1. Pagamenti
-  const pay = [["Immobile", "Tipo", "Mese di competenza", "Anno", "Data pagamento", "Importo", "Metodo", "Nota", "Giorni di ritardo"]];
+  const pay = [["Immobile", "Tipo", "Mese di competenza", "Anno", "Data pagamento", "Importo", "Metodo", "Nota", "Giorni di ritardo", "Ricevuta n.", "Conduttore"]];
   state.props.forEach(p => Object.keys(p.payments).sort().forEach(ym => p.payments[ym].forEach(x => {
-    pay.push([p.name, p.type, xlDate(ym + "-01"), +ym.slice(0, 4), xlDate(x.date), num(x.amount), x.method || "", x.note || "", x.date ? dayDiff(x.date, dueDate(p, ym)) : ""]);
+    pay.push([p.name, p.type, xlDate(ym + "-01"), +ym.slice(0, 4), xlDate(x.date), num(x.amount), x.method || "", x.note || "", x.date ? dayDiff(x.date, dueDate(p, ym)) : "", x.rn || "", tenantName(p)]);
   })));
   const ws1 = XL.utils.aoa_to_sheet(pay); fmtCols(ws1, pay.length - 1, { C: MON, E: DATE, F: EUR });
-  fin(ws1, [22, 14, 16, 7, 15, 12, 16, 28, 10], pay.length - 1, "I");
+  fin(ws1, [22, 14, 16, 7, 15, 12, 16, 28, 10, 12, 22], pay.length - 1, "K");
 
   // 2. Riepilogo mensile (con formule)
   const mm = [["Immobile", "Tipo", "Mese", "Anno", "Scadenza", "Dovuto", "Pagato", "Differenza", "Stato", "Giorni di ritardo"]];
@@ -412,10 +426,106 @@ async function share(file) {
 function backupFile() {
   return new File([JSON.stringify({ app: "I miei Affitti", version: 1, exportedAt: new Date().toISOString(), data: state }, null, 1)], `Affitti_backup_${today()}.json`, { type: "application/json" });
 }
+/* ---------- ricevute PDF ---------- */
+const cap = t => t.charAt(0).toUpperCase() + t.slice(1);
+const slug = t => String(t).normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^A-Za-z0-9]+/g, "-").replace(/^-|-$/g, "");
+function receiptName(p, ym, x) { return `Ricevuta_${(x.rn || "").replace("/", "-")}_${slug(p.name)}_${slug(ymName(ym))}.pdf`; }
+function receiptPdf(p, ym, x) {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: "mm", format: "a5" });
+  const W = 148, M = 14;
+  const green = [23, 97, 61], ink = [21, 32, 26], gray = [95, 111, 102], red = [190, 30, 30];
+  // intestazione
+  doc.setFillColor(...green); doc.rect(0, 0, W, 30, "F");
+  doc.setTextColor(255, 255, 255);
+  doc.setFont("helvetica", "bold"); doc.setFontSize(15); doc.text("RICEVUTA DI PAGAMENTO", M, 14);
+  doc.setFont("helvetica", "normal"); doc.setFontSize(9.5); doc.text("Canone di locazione", M, 22);
+  doc.setFont("helvetica", "bold"); doc.setFontSize(11); doc.text("N. " + (x.rn || "-"), W - M, 14, { align: "right" });
+  doc.setFont("helvetica", "normal"); doc.setFontSize(9.5); doc.text("Data " + fmtDate(x.date || today()), W - M, 22, { align: "right" });
+  // dati
+  let y = 44;
+  const row = (label, value, big) => {
+    doc.setFont("helvetica", "normal"); doc.setFontSize(8.5); doc.setTextColor(...gray); doc.text(label.toUpperCase(), M, y);
+    doc.setFont("helvetica", "bold"); doc.setFontSize(big ? 15 : 12); doc.setTextColor(...ink);
+    const lines = doc.splitTextToSize(String(value), W - 2 * M);
+    doc.text(lines, M, y + (big ? 7 : 6));
+    y += (big ? 16 : 13) + (lines.length - 1) * 5.5;
+  };
+  row("Ricevuto da", tenantName(p));
+  row("Immobile", p.name + (p.type ? "  (" + p.type + ")" : "") + (p.address ? "\n" + p.address : ""));
+  row("Mese di riferimento", cap(ymName(ym)));
+  row("Importo", eur.format(num(x.amount)), true);
+  row("Mezzo di pagamento", x.method || "-");
+  if (x.note) row("Note", x.note);
+  doc.setDrawColor(225, 232, 228); doc.setLineWidth(0.3); doc.line(M, y - 3, W - M, y - 3);
+  doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.setTextColor(...gray);
+  doc.text(doc.splitTextToSize(`Si dichiara di aver ricevuto la somma di ${eur.format(num(x.amount))} a titolo di canone di locazione per ${ymName(ym)}, relativo all'immobile sopra indicato.`, W - 2 * M), M, y + 3);
+  // timbro PAGATO (ruotato)
+  const cx = 46, cy = 172, a = 12 * Math.PI / 180, ca = Math.cos(a), sa = Math.sin(a);
+  const R = (dx, dy) => [cx + dx * ca + dy * sa, cy - dx * sa + dy * ca];
+  const box = (w, h) => { const pts = [R(-w / 2, -h / 2), R(w / 2, -h / 2), R(w / 2, h / 2), R(-w / 2, h / 2)]; for (let i = 0; i < 4; i++) { const p1 = pts[i], p2 = pts[(i + 1) % 4]; doc.line(p1[0], p1[1], p2[0], p2[1]); } };
+  doc.setDrawColor(...red); doc.setLineWidth(1); box(62, 25); doc.setLineWidth(0.35); box(57, 20);
+  doc.setTextColor(...red);
+  const stampText = (t, size, dy) => { doc.setFont("helvetica", "bold"); doc.setFontSize(size); const w = doc.getTextWidth(t); const h = size * 0.3528 * 0.7; const s0 = R(-w / 2, dy + h / 2); doc.text(t, s0[0], s0[1], { angle: 12 }); };
+  stampText("PAGATO", 24, -2.5); stampText(fmtDate(x.date || today()), 9, 6.5);
+  // firma e piè di pagina
+  doc.setTextColor(...gray); doc.setFont("helvetica", "normal"); doc.setFontSize(9);
+  doc.text("Firma", W - M - 46, 178); doc.setDrawColor(...gray); doc.setLineWidth(0.3); doc.line(W - M - 46, 190, W - M, 190);
+  doc.setFontSize(7.5); doc.text("Ricevuta generata con I miei Affitti", W / 2, 202, { align: "center" });
+  doc.setProperties({ title: "Ricevuta " + (x.rn || ""), subject: p.name + " - " + ymName(ym) });
+  return new File([doc.output("arraybuffer")], receiptName(p, ym, x), { type: "application/pdf" });
+}
+async function saveReceipt(p, ym, x, auto) {
+  const file = receiptPdf(p, ym, x);
+  if (AB && AB.saveFileIn) {
+    const r = AB.saveFileIn(file.name, file.type, await toB64(file), "Ricevute affitti");
+    if (r === "ok") return "Ricevuta salvata in Download › Ricevute affitti.";
+    if (auto) return "";
+  } else if (auto) return "";
+  return await download(file);
+}
+function openReceipt(p, ym, x, msg) {
+  if (!x) return;
+  if (!window.jspdf) { toast("Componente PDF non caricato: riapri l'app"); return; }
+  openSheet(`
+   <h2>Ricevuta n. ${esc(x.rn || "")}</h2>
+   ${msg ? `<div class="note">${esc(msg)}</div>` : ""}
+   <table class="tbl rcp">
+     <tr><td>Ricevuto da</td><td>${esc(tenantName(p))}</td></tr>
+     <tr><td>Immobile</td><td>${esc(p.name)}</td></tr>
+     <tr><td>Mese</td><td style="text-transform:capitalize">${ymName(ym)}</td></tr>
+     <tr><td>Importo</td><td><b>${eur.format(num(x.amount))}</b></td></tr>
+     <tr><td>Pagamento</td><td>${esc(x.method)} · ${fmtDate(x.date)}</td></tr>
+   </table>
+   <div class="gap"></div>
+   <button class="btn" id="rSh">📤 Invia ricevuta (WhatsApp, email…)</button>
+   <div class="gap"></div>
+   <button class="btn sec" id="rSv">Salva PDF sul telefono</button>
+   <div class="gap"></div>
+   <button class="btn sec" id="rCl">Chiudi</button>`, () => {
+    const g = f => async () => { try { await f(); } catch (e) { console.error(e); toast("Errore nella creazione della ricevuta"); } };
+    $("#rSh").onclick = g(async () => { const f = receiptPdf(p, ym, x); if (!(await share(f))) toast(await download(f)); });
+    $("#rSv").onclick = g(async () => toast(await saveReceipt(p, ym, x, false)));
+    $("#rCl").onclick = closeSheet;
+  });
+}
+function allReceipts() {
+  const out = [];
+  state.props.forEach(p => Object.keys(p.payments).forEach(ym => p.payments[ym].forEach(x => out.push({ p, ym, x }))));
+  return out.sort((a, b) => ((b.x.date || "") + b.x.rn).localeCompare((a.x.date || "") + a.x.rn));
+}
+let recShown = 20;
 function renderExport() {
   const nPay = state.props.reduce((s, p) => s + Object.values(p.payments).reduce((a, l) => a + l.length, 0), 0);
   const canShare = !!(navigator.canShare || AB);
+  const recs = allReceipts();
   $("#main").innerHTML = `
+  <div class="card"><h3>Ricevute</h3>
+    <div class="cs">Ogni pagamento ha la sua ricevuta in PDF, sempre disponibile qui. Tocca una ricevuta per inviarla o salvarla.</div>
+    ${AB ? `<label class="sw"><input type="checkbox" id="autoR"${state.settings.autoReceipt ? " checked" : ""}><span>Salva automaticamente ogni nuova ricevuta in <b>Download › Ricevute affitti</b></span></label>` : ""}
+    ${recs.length ? `<div class="rlist">${recs.slice(0, recShown).map(r => `<button class="ritem" data-rp="${r.p.id}" data-rym="${r.ym}" data-rid="${r.x.id}"><span class="rn">${esc(r.x.rn || "")}</span><span class="rt"><b>${esc(r.p.name)}</b> · <span style="text-transform:capitalize">${ymName(r.ym)}</span><br><span class="muted">${eur.format(num(r.x.amount))} · ${esc(r.x.method)} · ${fmtDate(r.x.date)}</span></span><span>🧾</span></button>`).join("")}</div>
+      ${recs.length > recShown ? `<button class="btn sec sm" id="rMore" style="margin-top:8px">Mostra altre (${recs.length - recShown})</button>` : ""}` : `<p class="muted">Nessun pagamento registrato.</p>`}
+  </div>
   <div class="card"><h3>File Excel</h3>
     <div class="cs">Crea un file .xlsx con ${state.props.length} ${state.props.length === 1 ? "immobile" : "immobili"} e ${nPay} pagamenti, pronto per filtri e calcoli. Contiene: riepilogo mensile con le differenze già calcolate, riepilogo annuale con le formule, elenco completo dei pagamenti, immobili e canoni.</div>
     <button class="btn" id="xDl"${state.props.length ? "" : " disabled"}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>Scarica file Excel</button>
@@ -433,6 +543,12 @@ function renderExport() {
     <div class="cs">Per aprirla come un'app dalla schermata Home: in Chrome tocca il menu ⋮ e scegli «Installa app» o «Aggiungi a schermata Home». Una volta installata funziona anche senza internet.</div>
     <button class="btn ${deferredInstall ? "" : "hidden"}" id="bInst">Installa ora</button>
   </div>`;
+  if ($("#autoR")) $("#autoR").onchange = e => { state.settings.autoReceipt = e.target.checked; persist(); };
+  if ($("#rMore")) $("#rMore").onclick = () => { recShown += 50; render(); };
+  $("#main").querySelectorAll(".ritem").forEach(b => b.onclick = () => {
+    const p = state.props.find(q => q.id === b.dataset.rp); if (!p) return;
+    openReceipt(p, b.dataset.rym, paysOf(p, b.dataset.rym).find(x => x.id === b.dataset.rid));
+  });
   const guard = f => async () => { if (!window.XLSX) { toast("Componente Excel non caricato: riapri l'app"); return; } try { await f(); } catch (e) { console.error(e); toast("Errore nella creazione del file"); } };
   if (state.props.length) {
     $("#xDl").onclick = guard(async () => toast(await download(xlsxFile())));
@@ -474,8 +590,36 @@ function confirmBtn(btn, label, fn) { btn.onclick = () => { if (btn.dataset.arm)
 function quickPay(ym) {
   const p = cur(); const rest = Math.max(0, dueOf(p, ym) - paidOf(p, ym));
   if (rest <= 0) { openMonth(ym); return; }
-  (p.payments[ym] = p.payments[ym] || []).push({ id: uid(), amount: rest, date: today(), method: p.lastMethod || "Contanti", note: "" });
-  persist(); render(); toast(ymName(ym) + ": registrati " + eur.format(rest));
+  openSheet(`
+   <h2><span class="mn">${ymName(ym)}</span></h2>
+   <div class="sub">${esc(p.name)} · ${eur.format(rest)} — come è stato pagato?</div>
+   <div class="mgrid">${METODI_RAPIDI.map(([m, ic]) => `<button class="mbtn" data-m="${m}"><span>${ic}</span>${m}</button>`).join("")}</div>
+   <div class="gap"></div>
+   <button class="btn sec" id="qMore">Altro metodo, importo o data diversa…</button>
+   <div class="gap"></div><button class="btn sec" id="qClose">Annulla</button>`, () => {
+    $("#sh").querySelectorAll(".mbtn").forEach(b => b.onclick = () => {
+      const x = addPayment(p, ym, { amount: rest, date: today(), method: b.dataset.m, note: "" });
+      render(); afterPayment(p, ym, x);
+    });
+    $("#qMore").onclick = () => openMonth(ym);
+    $("#qClose").onclick = closeSheet;
+  });
+}
+function addPayment(p, ym, data) {
+  const x = Object.assign({ id: uid() }, data);
+  assignReceipt(x);
+  p.lastMethod = x.method;
+  (p.payments[ym] = p.payments[ym] || []).push(x);
+  persist();
+  return x;
+}
+/* dopo un pagamento: salva la ricevuta (solo app Android) e offre di inviarla */
+async function afterPayment(p, ym, x) {
+  let saved = "";
+  if (AB && state.settings.autoReceipt && window.jspdf) {
+    try { saved = await saveReceipt(p, ym, x, true); } catch (e) { saved = ""; }
+  }
+  openReceipt(p, ym, x, `Pagamento registrato. ${saved}`);
 }
 function openMonth(ym) {
   const p = cur(); const due = dueOf(p, ym), paid = paidOf(p, ym), st = status(p, ym); const rest = Math.max(0, due - paid);
@@ -485,7 +629,7 @@ function openMonth(ym) {
    <h2><span class="mn">${ymName(ym)}</span></h2>
    <div class="sub"><span class="tag ${st}">${LAB[st]}</span> &nbsp;Dovuto ${eur.format(due)} · scadenza ${fmtDate(dueDate(p, ym))}${d !== null && d > 0 ? ` · ${d} gg di ritardo` : ""}</div>
    <div class="prog"><i style="width:${pct}%"></i></div>
-   ${list.length ? `<div class="sec-t">Pagamenti registrati</div>` + list.map(x => `<div class="pay"><div class="t"><span class="a">${eur.format(num(x.amount))}</span><br><span class="muted">${fmtDate(x.date)} · ${esc(x.method)}${x.note ? " · " + esc(x.note) : ""}</span></div><button class="x" data-del="${x.id}">Elimina</button></div>`).join("") : `<p class="muted">Nessun pagamento registrato per questo mese.</p>`}
+   ${list.length ? `<div class="sec-t">Pagamenti registrati</div>` + list.map(x => `<div class="pay"><div class="t"><span class="a">${eur.format(num(x.amount))}</span><br><span class="muted">${fmtDate(x.date)} · ${esc(x.method)}${x.note ? " · " + esc(x.note) : ""}${x.rn ? " · ric. " + x.rn : ""}</span></div><button class="rbtn" data-rec="${x.id}">🧾 Ricevuta</button><button class="x" data-del="${x.id}">Elimina</button></div>`).join("") : `<p class="muted">Nessun pagamento registrato per questo mese.</p>`}
    <div class="sec-t">${list.length ? "Aggiungi un altro pagamento" : "Registra pagamento"}</div>
    <div class="row2">
      <label class="fld"><span>Importo (€)</span><input id="pA" inputmode="decimal" value="${(rest || due).toFixed(2).replace(".", ",")}"></label>
@@ -497,11 +641,11 @@ function openMonth(ym) {
    <div class="gap"></div><button class="btn sec" id="pClose">Chiudi</button>`, () => {
     $("#pSave").onclick = () => {
       const a = num($("#pA").value); if (a <= 0) { toast("Inserisci un importo valido"); return; }
-      const m = $("#pM").value; p.lastMethod = m;
-      (p.payments[ym] = p.payments[ym] || []).push({ id: uid(), amount: a, date: $("#pD").value || today(), method: m, note: $("#pN").value.trim() });
-      persist(); render(); closeSheet(); toast("Pagamento salvato");
+      const x = addPayment(p, ym, { amount: a, date: $("#pD").value || today(), method: $("#pM").value, note: $("#pN").value.trim() });
+      render(); afterPayment(p, ym, x);
     };
     $("#pClose").onclick = closeSheet;
+    $("#sh").querySelectorAll("[data-rec]").forEach(b => b.onclick = () => openReceipt(p, ym, paysOf(p, ym).find(x => x.id === b.dataset.rec)));
     $("#sh").querySelectorAll("[data-del]").forEach(btn => confirmBtn(btn, "Conferma", () => {
       p.payments[ym] = paysOf(p, ym).filter(x => x.id !== btn.dataset.del);
       if (!p.payments[ym].length) delete p.payments[ym];
@@ -521,7 +665,7 @@ function openProp(id) {
      <label class="fld"><span>Tipo</span><select id="fTy">${TIPI.map(t => `<option${t === (p ? p.type : "Box / garage") ? " selected" : ""}>${t}</option>`).join("")}</select></label>
      <label class="fld"><span>Scadenza (giorno)</span><input id="fG" type="number" min="1" max="31" inputmode="numeric" value="${p ? p.dueDay : 5}"></label>
    </div>
-   <label class="fld"><span>Inquilino / proprietario</span><input id="fT" value="${esc(p ? p.tenant || "" : "")}" placeholder="es. Mario Rossi"></label>
+   <label class="fld"><span>Conduttore (inquilino)</span><input id="fT" value="${esc(p ? p.tenant || "" : "")}" placeholder="es. Mario Rossi — appare sulle ricevute"></label>
    <label class="fld"><span>Indirizzo (facoltativo)</span><input id="fA" value="${esc(p ? p.address || "" : "")}" placeholder="es. Via Roma 10, Roma"></label>
    <div class="row2">
      <label class="fld"><span>Primo mese da pagare</span><input id="fS" type="month" value="${esc(p ? p.start : rates[0].from)}"></label>

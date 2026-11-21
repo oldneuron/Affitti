@@ -10,3 +10,4 @@ node_modules/
 app/src/main/res/mipmap-*dpi/
 app/src/main/assets/www/icon-192.png
 app/src/main/assets/www/xlsx.mini.min.js
+app/src/main/assets/www/jspdf.umd.min.js

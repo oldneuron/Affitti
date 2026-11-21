@@ -163,6 +163,29 @@ public class MainActivity extends Activity {
             }
         }
 
+        /** Salva in Download/<sottocartella> (Android 10 e successivi). */
+        @JavascriptInterface
+        public String saveFileIn(String name, String mime, String base64, String subdir) {
+            if (Build.VERSION.SDK_INT < 29) return "unsupported";
+            try {
+                byte[] data = Base64.decode(base64, Base64.DEFAULT);
+                String folder = subdir.replaceAll("[\\\\/:*?\"<>|]", "_");
+                ContentValues cv = new ContentValues();
+                cv.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
+                cv.put(MediaStore.MediaColumns.MIME_TYPE, mime);
+                cv.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/" + folder);
+                Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
+                if (uri == null) return "error";
+                try (OutputStream os = getContentResolver().openOutputStream(uri)) {
+                    if (os == null) return "error";
+                    os.write(data);
+                }
+                return "ok";
+            } catch (Exception e) {
+                return "error";
+            }
+        }
+
         @JavascriptInterface
         public String shareFile(String name, String mime, String base64) {
             try {
